@@ -12,11 +12,13 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoWatermarkCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const blobUrlRef = useRef<string | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isHidden, setIsHidden] = useState(false);
 
   // Get watermark text from environment variable
   const watermarkText = process.env.NEXT_PUBLIC_WATERMARK_TEXT || '';
@@ -308,6 +310,70 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
     }
   }, [fileName, type]);
 
+  // Hide sensitive data (images and videos) on screenshot attempt (Experimental)
+  useEffect(() => {
+    const hideMediaOnScreenshot = () => {
+      setIsHidden(true);
+      
+      // Restore visibility after a short delay
+      setTimeout(() => {
+        setIsHidden(false);
+      }, 300);
+    };
+
+    // Detect PrintScreen key
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'PrintScreen') {
+        hideMediaOnScreenshot();
+      }
+    };
+
+    // Detect common screenshot shortcuts
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Windows+Shift+S (Windows Snipping Tool)
+      if (e.key === 'S' && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+        hideMediaOnScreenshot();
+      }
+      // Mac: Cmd+Shift+3/4/5
+      if ((e.key === '3' || e.key === '4' || e.key === '5') && e.shiftKey && e.metaKey) {
+        hideMediaOnScreenshot();
+      }
+    };
+
+    // Detect clipboard events (when screenshot is copied to clipboard)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Page might be hidden for screenshot
+        setTimeout(() => {
+          if (!document.hidden) {
+            hideMediaOnScreenshot();
+          }
+        }, 100);
+      }
+    };
+
+    // Additional detection: monitor for focus loss (common when taking screenshots)
+    const handleBlur = () => {
+      setTimeout(() => {
+        if (document.hasFocus()) {
+          hideMediaOnScreenshot();
+        }
+      }, 50);
+    };
+
+    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      document.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-zinc-200 dark:bg-zinc-800">
@@ -330,7 +396,7 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
         ref={canvasRef}
         className="w-full h-full select-none pointer-events-none"
         style={{ 
-          display: 'block',
+          display: isHidden ? 'none' : 'block',
           imageRendering: 'auto',
         }}
         onContextMenu={(e) => e.preventDefault()}
@@ -339,7 +405,11 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
     );
   } else {
     return (
-      <div className="relative w-full h-full">
+      <div 
+        ref={videoContainerRef} 
+        className="relative w-full h-full"
+        style={{ display: isHidden ? 'none' : 'block' }}
+      >
         <video
           ref={videoRef}
           src={blobUrl || undefined}
@@ -354,6 +424,7 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
             maxWidth: '100%',
             maxHeight: '100%',
             imageRendering: 'auto',
+            display: isHidden ? 'none' : 'block',
           }}
           onPlay={(e) => {
             const video = e.currentTarget;
@@ -379,7 +450,7 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
             ref={videoWatermarkCanvasRef}
             className="absolute inset-0 w-full h-full pointer-events-none select-none"
             style={{
-              display: 'block',
+              display: isHidden ? 'none' : 'block',
             }}
             onContextMenu={(e) => e.preventDefault()}
             onDragStart={(e) => e.preventDefault()}
