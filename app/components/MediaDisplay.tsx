@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
 
 interface MediaDisplayProps {
   fileName: string;
@@ -11,66 +10,20 @@ interface MediaDisplayProps {
 
 export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDisplayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoWatermarkCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const blobUrlRef = useRef<string | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const watermarkRef = useRef<HTMLImageElement | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [watermarkLoaded, setWatermarkLoaded] = useState(false);
 
-  // Get watermark path from environment variable
-  const getWatermarkPath = (): string => {
-    const envPath = process.env.NEXT_PUBLIC_WATERMARK_PATH;
-    if (!envPath) {
-      // Fallback to default path
-      return '/images/watermark/tmbc.png';
-    }
-    
-    // Convert file system path to web path
-    // Remove 'public\' or 'public/' prefix and convert backslashes to forward slashes
-    let webPath = envPath.replace(/^public[\\/]/, '').replace(/\\/g, '/');
-    
-    // Ensure it starts with /
-    if (!webPath.startsWith('/')) {
-      webPath = '/' + webPath;
-    }
-    
-    return webPath;
-  };
-
-  const watermarkPath = getWatermarkPath();
-
-  // Load watermark image
-  useEffect(() => {
-    const watermark = new window.Image();
-    watermark.crossOrigin = 'anonymous';
-    watermark.onload = () => {
-      watermarkRef.current = watermark;
-      setWatermarkLoaded(true);
-    };
-    watermark.onerror = () => {
-      console.warn('Failed to load watermark from:', watermarkPath);
-      setWatermarkLoaded(false);
-    };
-    watermark.src = watermarkPath;
-  }, [watermarkPath]);
-
-  // Redraw canvas when watermark loads (for images)
-  useEffect(() => {
-    if (watermarkLoaded && type === 'images' && imageRef.current && canvasRef.current) {
-      // Small delay to ensure everything is ready
-      setTimeout(() => {
-        drawImageToCanvas();
-      }, 50);
-    }
-  }, [watermarkLoaded, type]);
+  // Get watermark text from environment variable
+  const watermarkText = process.env.NEXT_PUBLIC_WATERMARK_TEXT || '';
 
   const drawImageToCanvas = () => {
     const canvas = canvasRef.current;
     const img = imageRef.current;
-    const watermark = watermarkRef.current;
     if (!canvas || !img) return;
 
     const container = canvas.parentElement;
@@ -130,30 +83,139 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
       // Draw main image at low resolution
       ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
 
-      // Draw watermark if loaded (check both state and image complete property)
-      if (watermark && watermark.complete && watermark.naturalWidth > 0) {
-        // Calculate watermark size (15% of canvas width, maintain aspect ratio)
-        const watermarkScale = 0.15;
-        const watermarkWidth = canvas.width * watermarkScale;
-        const watermarkHeight = (watermark.height / watermark.width) * watermarkWidth;
-
-        // Position: Top right corner with padding
-        const padding = 10;
-        const watermarkX = canvas.width - watermarkWidth - padding;
-        const watermarkY = padding;
-
-        // Set opacity for watermark (0.8 = 80% opacity for strong visibility)
-        ctx.globalAlpha = 0.8;
-        ctx.drawImage(
-          watermark,
-          watermarkX,
-          watermarkY,
-          watermarkWidth,
-          watermarkHeight
-        );
-        ctx.globalAlpha = 1.0; // Reset alpha
+      // Draw diagonal repeated watermark text if available
+      if (watermarkText) {
+        ctx.save();
+        ctx.globalAlpha = 0.3; // Semi-transparent watermark
+        
+        // Calculate font size based on canvas dimensions
+        const fontSize = Math.max(20, Math.min(canvas.width, canvas.height) * 0.06);
+        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Measure text width for spacing
+        const textMetrics = ctx.measureText(watermarkText);
+        const textWidth = textMetrics.width;
+        const textHeight = fontSize;
+        
+        // Calculate spacing between watermarks (diagonal pattern)
+        const spacingX = textWidth * 1.5;
+        const spacingY = textHeight * 2;
+        
+        // Rotate context for diagonal text (approximately -45 degrees)
+        const angle = -Math.PI / 4; // -45 degrees in radians
+        
+        // Calculate diagonal distance to cover entire canvas
+        const diagonal = Math.sqrt(canvas.width * canvas.width + canvas.height * canvas.height);
+        const stepsX = Math.ceil(diagonal / spacingX) + 2;
+        const stepsY = Math.ceil(diagonal / spacingY) + 2;
+        
+        // Draw repeated watermark pattern
+        for (let i = -stepsX; i < stepsX; i++) {
+          for (let j = -stepsY; j < stepsY; j++) {
+            // Calculate position in rotated coordinate system
+            const x = canvas.width / 2 + (i * spacingX * Math.cos(angle)) - (j * spacingY * Math.sin(angle));
+            const y = canvas.height / 2 + (i * spacingX * Math.sin(angle)) + (j * spacingY * Math.cos(angle));
+            
+            // Only draw if within canvas bounds (with some margin)
+            if (x > -textWidth && x < canvas.width + textWidth && 
+                y > -textHeight && y < canvas.height + textHeight) {
+              ctx.save();
+              ctx.translate(x, y);
+              ctx.rotate(angle);
+              
+              // Draw text with stroke for visibility
+              ctx.strokeText(watermarkText, 0, 0);
+              ctx.fillText(watermarkText, 0, 0);
+              
+              ctx.restore();
+            }
+          }
+        }
+        
+        ctx.restore();
       }
     }
+  };
+
+  // Draw watermark on video canvas overlay
+  const drawVideoWatermark = () => {
+    const canvas = videoWatermarkCanvasRef.current;
+    if (!canvas || !watermarkText) return;
+
+    const container = canvas.parentElement;
+    if (!container) return;
+
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    canvas.width = width;
+    canvas.height = height;
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.globalAlpha = 0.3; // Semi-transparent watermark
+
+    // Calculate font size based on canvas dimensions
+    const fontSize = Math.max(20, Math.min(canvas.width, canvas.height) * 0.06);
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.fillStyle = 'white';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Measure text width for spacing
+    const textMetrics = ctx.measureText(watermarkText);
+    const textWidth = textMetrics.width;
+    const textHeight = fontSize;
+
+    // Calculate spacing between watermarks (diagonal pattern)
+    const spacingX = textWidth * 1.5;
+    const spacingY = textHeight * 2;
+
+    // Rotate context for diagonal text (approximately -45 degrees)
+    const angle = -Math.PI / 4; // -45 degrees in radians
+
+    // Calculate diagonal distance to cover entire canvas
+    const diagonal = Math.sqrt(canvas.width * canvas.width + canvas.height * canvas.height);
+    const stepsX = Math.ceil(diagonal / spacingX) + 2;
+    const stepsY = Math.ceil(diagonal / spacingY) + 2;
+
+    // Draw repeated watermark pattern
+    for (let i = -stepsX; i < stepsX; i++) {
+      for (let j = -stepsY; j < stepsY; j++) {
+        // Calculate position in rotated coordinate system
+        const x = canvas.width / 2 + (i * spacingX * Math.cos(angle)) - (j * spacingY * Math.sin(angle));
+        const y = canvas.height / 2 + (i * spacingX * Math.sin(angle)) + (j * spacingY * Math.cos(angle));
+
+        // Only draw if within canvas bounds (with some margin)
+        if (x > -textWidth && x < canvas.width + textWidth &&
+            y > -textHeight && y < canvas.height + textHeight) {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(angle);
+
+          // Draw text with stroke for visibility
+          ctx.strokeText(watermarkText, 0, 0);
+          ctx.fillText(watermarkText, 0, 0);
+
+          ctx.restore();
+        }
+      }
+    }
+
+    ctx.restore();
   };
 
   useEffect(() => {
@@ -186,7 +248,7 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
           img.onload = () => {
             // Small delay to ensure container is rendered
             setTimeout(() => {
-              // Always redraw canvas (watermark will be added if loaded)
+              // Always redraw canvas (watermark text will be added if available)
               drawImageToCanvas();
               setLoading(false);
             }, 50);
@@ -200,6 +262,10 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
           // For videos, use blob URL
           setBlobUrl(objectUrl);
           setLoading(false);
+          // Draw watermark after video container is ready
+          setTimeout(() => {
+            drawVideoWatermark();
+          }, 100);
         }
       } catch (err) {
         console.error('Error loading media:', err);
@@ -227,7 +293,13 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
         }
       };
     } else {
+      const handleResize = () => {
+        drawVideoWatermark();
+      };
+      window.addEventListener('resize', handleResize);
+      
       return () => {
+        window.removeEventListener('resize', handleResize);
         if (blobUrlRef.current) {
           URL.revokeObjectURL(blobUrlRef.current);
           blobUrlRef.current = null;
@@ -296,29 +368,26 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
             if (video.videoWidth > 800 || video.videoHeight > 800) {
               video.style.imageRendering = 'auto';
             }
+            // Redraw watermark when video metadata is loaded
+            setTimeout(() => {
+              drawVideoWatermark();
+            }, 50);
           }}
         />
-        {watermarkLoaded && watermarkRef.current && (
-          <div
-            className="absolute top-0 right-0 pointer-events-none p-2.5 w-[15%] h-[15%]"
-            style={{ opacity: 0.8 }}
-          >
-            <div className="relative w-full h-full">
-              <Image
-                src={watermarkPath}
-                alt="Watermark"
-                fill
-                className="object-contain"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-                onContextMenu={(e) => e.preventDefault()}
-                onDragStart={(e) => e.preventDefault()}
-                unoptimized
-              />
-            </div>
-          </div>
+        {watermarkText && (
+          <canvas
+            ref={videoWatermarkCanvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none select-none"
+            style={{
+              display: 'block',
+            }}
+            onContextMenu={(e) => e.preventDefault()}
+            onDragStart={(e) => e.preventDefault()}
+          />
         )}
       </div>
     );
   }
 }
+
 
