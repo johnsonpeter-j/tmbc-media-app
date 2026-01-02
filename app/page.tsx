@@ -20,6 +20,7 @@ export default function Home() {
   const [columnCount, setColumnCount] = useState(4);
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(400);
+  const [selectedMedia, setSelectedMedia] = useState<{ fileName: string; type: FileType } | null>(null);
   const currentlyPlayingVideoRef = useRef<HTMLVideoElement | null>(null);
   const gridRef = useRef<Grid>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -99,6 +100,20 @@ export default function Home() {
   // Calculate row count
   const rowCount = Math.ceil(files.length / columnCount);
   const cellSize = containerWidth > 0 ? Math.floor((containerWidth - 16) / columnCount) : 200;
+
+  // Handle ESC key to close modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedMedia) {
+        setSelectedMedia(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedMedia]);
 
   // Disable right-click and keyboard shortcuts
   useEffect(() => {
@@ -229,14 +244,21 @@ export default function Home() {
         }}
       >
         <div
-          className="relative aspect-square bg-zinc-100 dark:bg-zinc-900 rounded-lg overflow-hidden group select-none w-full h-full"
+          className="relative aspect-square bg-zinc-100 dark:bg-zinc-900 rounded-lg overflow-hidden group select-none w-full h-full cursor-pointer"
           onContextMenu={(e) => e.preventDefault()}
           onDragStart={(e) => e.preventDefault()}
+          onClick={() => {
+            // Only open modal for images, videos handle their own clicks
+            if (activeTab === 'images') {
+              setSelectedMedia({ fileName, type: activeTab });
+            }
+          }}
         >
           <MediaDisplay 
             fileName={fileName} 
             type={activeTab} 
             onVideoPlay={activeTab === 'videos' ? handleVideoPlay : undefined}
+            onVideoClick={activeTab === 'videos' ? () => setSelectedMedia({ fileName, type: activeTab }) : undefined}
           />
           <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs p-2 opacity-0 group-hover:opacity-100 transition-opacity truncate">
             {fileName}
@@ -339,6 +361,63 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {/* Modal */}
+      {selectedMedia && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md transition-opacity duration-300"
+          onClick={() => setSelectedMedia(null)}
+        >
+          <div
+            className="relative w-full max-w-7xl max-h-[92vh] mx-4 my-4 flex flex-col items-center justify-center transform transition-all duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header with close button */}
+            <div className="w-full flex items-center justify-between mb-3 px-1">
+              <div className="flex-1"></div>
+              <h2 className="flex-1 text-center text-white text-base sm:text-lg font-semibold truncate px-4">
+                {selectedMedia.fileName}
+              </h2>
+              <div className="flex-1 flex justify-end">
+                <button
+                  onClick={() => setSelectedMedia(null)}
+                  className="text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl p-2.5 transition-all duration-200 hover:scale-110 active:scale-95 backdrop-blur-sm border border-white/20 shadow-lg hover:shadow-xl"
+                  aria-label="Close modal"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Media Container */}
+            <div className="relative w-full bg-gradient-to-br from-zinc-900/80 to-zinc-950/80 rounded-2xl overflow-hidden shadow-2xl border border-white/20 backdrop-blur-sm">
+              <div className="w-full h-[calc(92vh-100px)] min-h-[500px] max-h-[85vh] flex items-center justify-center p-4 sm:p-6">
+                <div className={`w-full h-full flex items-center justify-center ${selectedMedia.type === 'videos' ? 'justify-center' : ''}`}>
+                  <MediaDisplay
+                    fileName={selectedMedia.fileName}
+                    type={selectedMedia.type}
+                    onVideoPlay={selectedMedia.type === 'videos' ? handleVideoPlay : undefined}
+                    fullSize={true}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

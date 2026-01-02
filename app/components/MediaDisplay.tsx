@@ -6,9 +6,11 @@ interface MediaDisplayProps {
   fileName: string;
   type: 'images' | 'videos';
   onVideoPlay?: (videoElement: HTMLVideoElement) => void;
+  fullSize?: boolean;
+  onVideoClick?: () => void;
 }
 
-export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDisplayProps) {
+export default function MediaDisplay({ fileName, type, onVideoPlay, fullSize = false, onVideoClick }: MediaDisplayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoWatermarkCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -30,60 +32,72 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
 
     const container = canvas.parentElement;
     
-    // Set low resolution: max 800px for width/height
-    const MAX_RESOLUTION = 800;
-    let displayWidth = container ? container.clientWidth : img.width;
-    let displayHeight = container ? container.clientHeight : img.height;
+    // For fullSize mode, use actual image dimensions or container size, maintaining aspect ratio
+    // For normal mode, limit to 800px max
+    const MAX_RESOLUTION = fullSize ? Infinity : 800;
     
-    // Limit to maximum resolution while maintaining aspect ratio
-    if (displayWidth > MAX_RESOLUTION || displayHeight > MAX_RESOLUTION) {
-      const aspect = displayWidth / displayHeight;
-      if (displayWidth > displayHeight) {
-        displayWidth = MAX_RESOLUTION;
-        displayHeight = MAX_RESOLUTION / aspect;
+    const imgAspect = img.width / img.height;
+    let containerWidth = container ? container.clientWidth : img.width;
+    let containerHeight = container ? container.clientHeight : img.height;
+    const containerAspect = containerWidth / containerHeight;
+    
+    // Calculate display dimensions maintaining aspect ratio
+    let displayWidth, displayHeight;
+    
+    if (fullSize) {
+      // In fullSize mode, fit image to container while maintaining aspect ratio
+      if (imgAspect > containerAspect) {
+        // Image is wider - fit to container width
+        displayWidth = containerWidth;
+        displayHeight = containerWidth / imgAspect;
       } else {
-        displayHeight = MAX_RESOLUTION;
-        displayWidth = MAX_RESOLUTION * aspect;
+        // Image is taller - fit to container height
+        displayHeight = containerHeight;
+        displayWidth = containerHeight * imgAspect;
+      }
+    } else {
+      // Normal mode - use container size but limit resolution
+      displayWidth = containerWidth;
+      displayHeight = containerHeight;
+      
+      if (displayWidth > MAX_RESOLUTION || displayHeight > MAX_RESOLUTION) {
+        if (displayWidth > displayHeight) {
+          displayWidth = MAX_RESOLUTION;
+          displayHeight = MAX_RESOLUTION / imgAspect;
+        } else {
+          displayHeight = MAX_RESOLUTION;
+          displayWidth = MAX_RESOLUTION * imgAspect;
+        }
       }
     }
     
-    // Set canvas to low resolution
+    // Set canvas dimensions
     canvas.width = displayWidth;
     canvas.height = displayHeight;
     
-    // Set CSS size to fill container (for display)
+    // Set CSS size - for fullSize, use auto sizing to maintain aspect ratio
     if (container) {
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
+      if (fullSize) {
+        canvas.style.width = 'auto';
+        canvas.style.height = 'auto';
+        canvas.style.maxWidth = '100%';
+        canvas.style.maxHeight = '100%';
+      } else {
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+      }
     }
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      // Use lower quality image smoothing for performance
+      // Use higher quality for fullSize mode
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'low';
+      ctx.imageSmoothingQuality = fullSize ? 'high' : 'low';
       
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const imgAspect = img.width / img.height;
-      const canvasAspect = canvas.width / canvas.height;
       
-      let drawWidth = canvas.width;
-      let drawHeight = canvas.height;
-      let drawX = 0;
-      let drawY = 0;
-
-      if (imgAspect > canvasAspect) {
-        drawHeight = canvas.height;
-        drawWidth = drawHeight * imgAspect;
-        drawX = (canvas.width - drawWidth) / 2;
-      } else {
-        drawWidth = canvas.width;
-        drawHeight = drawWidth / imgAspect;
-        drawY = (canvas.height - drawHeight) / 2;
-      }
-
-      // Draw main image at low resolution
-      ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+      // Draw image to fill canvas (already sized to maintain aspect ratio)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
       // Draw diagonal repeated watermark text if available
       if (watermarkText) {
@@ -147,18 +161,33 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
   // Draw watermark on video canvas overlay
   const drawVideoWatermark = () => {
     const canvas = videoWatermarkCanvasRef.current;
-    if (!canvas || !watermarkText) return;
+    const video = videoRef.current;
+    if (!canvas || !watermarkText || !video) return;
 
-    const container = canvas.parentElement;
-    if (!container) return;
+    // Get the actual video element's rendered size, not the container
+    const videoRect = video.getBoundingClientRect();
+    const width = videoRect.width;
+    const height = videoRect.height;
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    if (width === 0 || height === 0) return;
 
     canvas.width = width;
     canvas.height = height;
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
+    
+    // Position canvas to match video element's position and size
+    if (fullSize) {
+      // In fullSize mode, match video's actual dimensions
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      canvas.style.position = 'absolute';
+      canvas.style.top = '50%';
+      canvas.style.left = '50%';
+      canvas.style.transform = 'translate(-50%, -50%)';
+    } else {
+      // In normal mode, fill container
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+    }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -300,6 +329,23 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
       };
       window.addEventListener('resize', handleResize);
       
+      // Also redraw watermark when video element size changes (for fullSize mode)
+      if (fullSize && videoRef.current) {
+        const resizeObserver = new ResizeObserver(() => {
+          drawVideoWatermark();
+        });
+        resizeObserver.observe(videoRef.current);
+        
+        return () => {
+          window.removeEventListener('resize', handleResize);
+          resizeObserver.disconnect();
+          if (blobUrlRef.current) {
+            URL.revokeObjectURL(blobUrlRef.current);
+            blobUrlRef.current = null;
+          }
+        };
+      }
+      
       return () => {
         window.removeEventListener('resize', handleResize);
         if (blobUrlRef.current) {
@@ -309,6 +355,26 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
       };
     }
   }, [fileName, type]);
+
+  // Redraw canvas when fullSize changes (for images)
+  useEffect(() => {
+    if (type === 'images' && imageRef.current && !loading) {
+      // Small delay to ensure container is rendered with new size
+      setTimeout(() => {
+        drawImageToCanvas();
+      }, 100);
+    }
+  }, [fullSize, type, loading]);
+
+  // Redraw watermark when fullSize changes (for videos)
+  useEffect(() => {
+    if (type === 'videos' && videoRef.current && !loading && watermarkText) {
+      // Small delay to ensure video is rendered with new size
+      setTimeout(() => {
+        drawVideoWatermark();
+      }, 150);
+    }
+  }, [fullSize, type, loading, watermarkText]);
 
   // Hide sensitive data (images and videos) on screenshot attempt (Experimental)
   useEffect(() => {
@@ -392,28 +458,61 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
 
   if (type === 'images') {
     return (
-      <canvas
-        ref={canvasRef}
-        className="w-full h-full select-none pointer-events-none"
-        style={{ 
-          display: isHidden ? 'none' : 'block',
-          imageRendering: 'auto',
-        }}
-        onContextMenu={(e) => e.preventDefault()}
-        onDragStart={(e) => e.preventDefault()}
-      />
+      <div className={`w-full h-full flex items-center justify-center ${fullSize ? '' : 'pointer-events-none'}`}>
+        <canvas
+          ref={canvasRef}
+          className={`select-none ${fullSize ? 'max-w-full max-h-full' : 'w-full h-full'}`}
+          style={{ 
+            display: isHidden ? 'none' : 'block',
+            imageRendering: 'auto',
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+          onDragStart={(e) => e.preventDefault()}
+        />
+      </div>
     );
   } else {
     return (
       <div 
         ref={videoContainerRef} 
-        className="relative w-full h-full"
+        className={`relative w-full h-full ${fullSize ? 'flex items-center justify-center' : ''}`}
         style={{ display: isHidden ? 'none' : 'block' }}
+        onClick={(e) => {
+          // Only handle clicks for non-fullSize videos
+          if (fullSize || !onVideoClick) return;
+          
+          const container = e.currentTarget;
+          const video = videoRef.current;
+          if (!video) return;
+          
+          const rect = container.getBoundingClientRect();
+          const clickY = e.clientY - rect.top;
+          const containerHeight = rect.height;
+          
+          // Controls are typically in the bottom 25% of the video
+          const controlsAreaHeight = containerHeight * 0.25;
+          const isInControlsArea = clickY > (containerHeight - controlsAreaHeight);
+          
+          // Only open modal if click is not in controls area
+          if (!isInControlsArea) {
+            // Check video play state before potential control interaction
+            const wasPlaying = !video.paused;
+            
+            // Wait a bit to see if controls were used
+            setTimeout(() => {
+              const isPlaying = !video.paused;
+              // If play state didn't change, it means controls weren't used, so open modal
+              if (wasPlaying === isPlaying) {
+                onVideoClick();
+              }
+            }, 100);
+          }
+        }}
       >
         <video
           ref={videoRef}
           src={blobUrl || undefined}
-          className="w-full h-full object-cover select-none"
+          className={`${fullSize ? 'max-w-full max-h-full' : 'w-full h-full'} ${fullSize ? 'object-contain' : 'object-cover'} select-none`}
           controls
           preload="metadata"
           onContextMenu={(e) => e.preventDefault()}
@@ -421,10 +520,14 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
           controlsList="nodownload"
           playsInline
           style={{
-            maxWidth: '100%',
-            maxHeight: '100%',
+            maxWidth: fullSize ? '100%' : 'none',
+            maxHeight: fullSize ? '100%' : 'none',
+            width: fullSize ? 'auto' : '100%',
+            height: fullSize ? 'auto' : '100%',
             imageRendering: 'auto',
             display: isHidden ? 'none' : 'block',
+            margin: fullSize ? '0 auto' : '0', // Center horizontally in modal
+            pointerEvents: !fullSize && onVideoClick ? 'auto' : 'auto', // Allow controls to work
           }}
           onPlay={(e) => {
             const video = e.currentTarget;
@@ -448,7 +551,7 @@ export default function MediaDisplay({ fileName, type, onVideoPlay }: MediaDispl
         {watermarkText && (
           <canvas
             ref={videoWatermarkCanvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none select-none"
+            className={`pointer-events-none select-none ${fullSize ? 'absolute' : 'absolute inset-0'}`}
             style={{
               display: isHidden ? 'none' : 'block',
             }}
